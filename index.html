@@ -225,8 +225,8 @@
       <input type="range" id="speed" min="20" max="1600" step="10" value="220">
     </div>
     <div class="field grow">
-      <span class="cap">Size <b id="v-size">180</b></span>
-      <input type="range" id="size" min="24" max="600" step="2" value="180">
+      <span class="cap">Size <b id="v-size">150</b></span>
+      <input type="range" id="size" min="24" max="600" step="2" value="150">
     </div>
     <div class="field grow">
       <span class="cap">Logos <b id="v-count">1</b></span>
@@ -238,8 +238,8 @@
     <div class="field">
       <span class="cap">Colour</span>
       <select id="mode">
-        <option value="original" selected>Keep original</option>
-        <option value="bounce">Change on bounce</option>
+        <option value="original">Keep original</option>
+        <option value="bounce" selected>Change on bounce</option>
         <option value="rainbow">Rainbow cycle</option>
         <option value="solid">Single colour</option>
       </select>
@@ -253,6 +253,7 @@
 
     <button class="btn" id="full">Fullscreen</button>
     <button class="btn" id="expand" aria-expanded="false">More ▸</button>
+    <button class="btn" id="dismiss" title="Hide the bar (H brings it back)">Hide ▾</button>
   </div>
 
   <div class="row" id="more-row">
@@ -310,9 +311,9 @@
 
   const state = {
     speed: 220,      // px per second
-    size: 180,       // logo height in px
+    size: 150,       // logo height in px (this mark is 3.44:1, so ~516px wide)
     count: 1,
-    mode: "original",// original | bounce | rainbow | solid
+    mode: "bounce",  // original | bounce | rainbow | solid
     ink: "#29FF7A",
     bg: "#1F2933",
     trail: 0,        // ghost copies
@@ -350,7 +351,7 @@
   let aspect = 320 / 120;
   let logos = [];
   let corners = 0;
-  let lastTint = null;
+  let lightRatio = 0;   // share of the mark that's light-coloured
   let tintClock = 0;
 
   /* ============================ svg intake ============================ */
@@ -376,7 +377,24 @@
     svg.removeAttribute("width");
     svg.removeAttribute("height");
     svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    dropBackdrop(svg);
     return svg.outerHTML;
+  }
+
+  // Exported logos often carry a white rect behind the artwork. On a dark
+  // screen that reads as a white slab, so the first full-canvas opaque rect goes.
+  function dropBackdrop(svg) {
+    const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (vb.length !== 4) return;
+    const first = [...svg.children].find(el => !/^(defs|title|desc|style|metadata)$/i.test(el.tagName));
+    if (!first || first.tagName.toLowerCase() !== "rect") return;
+    const num = (v, full) => v && v.trim().endsWith("%") ? parseFloat(v) / 100 * full : parseFloat(v || 0);
+    const w = num(first.getAttribute("width"), vb[2]);
+    const h = num(first.getAttribute("height"), vb[3]);
+    const opacity = parseFloat(first.getAttribute("opacity") ?? "1");
+    const fill = (first.getAttribute("fill") || "").toLowerCase();
+    if (fill === "none" || opacity < 0.9) return;
+    if (w >= vb[2] * 0.98 && h >= vb[3] * 0.98) first.remove();
   }
 
   function aspectOf(html) {
@@ -390,6 +408,7 @@
       markup = sanitize(text);
       aspect = aspectOf(markup);
       build();
+      checkContrast();
       $("#hint").style.opacity = "0";
     } catch (err) {
       toast(err.message);
@@ -415,26 +434,52 @@
     toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3200);
   }
 
-  /* ============================ tinting ============================ */
+  /* ============================ tinting ============================
+     Marks like this one are a dark silhouette with lighter shapes knocked
+     out on top. Flattening everything to one colour would swallow the
+     knockout, so light shapes keep their original colour and only the dark
+     body gets recoloured. If the whole mark is light, everything tints.  */
+  function isLight(colour) {
+    if (!colour || colour.startsWith("url(")) return false; // gradients: tint them
+    const n = colour.match(/[\d.]+/g);
+    if (!n) return false;
+    if (n.length > 3 && Number(n[3]) < 0.1) return true;    // transparent: leave alone
+    return (0.2126 * n[0] + 0.7152 * n[1] + 0.0722 * n[2]) / 255 > 0.55;
+  }
+
   function paintable(root) {
     const fills = [], strokes = [];
+    let sum = 0, count = 0;
     root.querySelectorAll(SHAPES).forEach(el => {
       if (el.closest(SKIP)) return;
       const cs = getComputedStyle(el);
-      if (cs.fill && cs.fill !== "none" && cs.fill !== "rgba(0, 0, 0, 0)") fills.push(el);
-      if (cs.stroke && cs.stroke !== "none" && cs.stroke !== "rgba(0, 0, 0, 0)") strokes.push(el);
+      if (cs.fill && cs.fill !== "none" && cs.fill !== "rgba(0, 0, 0, 0)") {
+        const light = isLight(cs.fill);
+        fills.push({ el, light });
+        sum += light ? 1 : 0; count++;
+      }
+      if (cs.stroke && cs.stroke !== "none" && cs.stroke !== "rgba(0, 0, 0, 0)") {
+        strokes.push({ el, light: isLight(cs.stroke) });
+      }
     });
+    // an all-light mark has no knockouts to protect, so tint the lot
+    if (count && sum === count) {
+      fills.forEach(f => f.light = false);
+      strokes.forEach(s => s.light = false);
+    }
+    lightRatio = count ? sum / count : 0;
     return { fills, strokes };
   }
 
   function paint(target, colour) {
-    if (colour === null) {
-      target.fills.forEach(el => el.style.removeProperty("fill"));
-      target.strokes.forEach(el => el.style.removeProperty("stroke"));
-      return;
-    }
-    target.fills.forEach(el => el.style.setProperty("fill", colour, "important"));
-    target.strokes.forEach(el => el.style.setProperty("stroke", colour, "important"));
+    target.fills.forEach(f => {
+      if (colour === null || f.light) f.el.style.removeProperty("fill");
+      else f.el.style.setProperty("fill", colour, "important");
+    });
+    target.strokes.forEach(s => {
+      if (colour === null || s.light) s.el.style.removeProperty("stroke");
+      else s.el.style.setProperty("stroke", colour, "important");
+    });
   }
 
   function colourOf(l) {
@@ -673,7 +718,31 @@
   });
 
   $("#mode").value = state.mode;
-  $("#mode").addEventListener("change", e => { state.mode = e.target.value; logos.forEach(repaint); });
+  $("#mode").addEventListener("change", e => {
+    state.mode = e.target.value;
+    logos.forEach(repaint);
+    if (state.mode === "original") checkContrast();
+  });
+
+  // a dark mark on a dark screen just vanishes — say so rather than looking broken
+  function checkContrast() {
+    if (state.mode !== "original") return;
+    const hex = state.bg.replace("#", "");
+    const bgLum = (0.2126 * parseInt(hex.slice(0,2),16) + 0.7152 * parseInt(hex.slice(2,4),16)
+                 + 0.0722 * parseInt(hex.slice(4,6),16)) / 255;
+    if (lightRatio < 0.4 && bgLum < 0.45) {
+      toast("This mark is dark and so is the screen. Lighten Screen, or pick a colour mode.");
+    }
+  }
+
+  function hideBar() {
+    state.pinned = false;
+    $("#t-pin").classList.remove("on");
+    hovering = false;
+    clearTimeout(idleTimer);
+    document.body.classList.add("idle");
+  }
+  $("#dismiss").addEventListener("click", hideBar);
 
   $("#ink").value = state.ink;
   $("#ink").addEventListener("input", e => {
@@ -725,12 +794,7 @@
     else if (k === "r") $("#reset").click();
     else if (k === "h") {
       // the global wake() handler already ran; only hide if the bar was already showing
-      if (!wokeFromHidden) {
-        state.pinned = false;
-        $("#t-pin").classList.remove("on");
-        clearTimeout(idleTimer);
-        document.body.classList.add("idle");
-      }
+      if (!wokeFromHidden) hideBar();
     }
     else if (k === "o") $("#load").click();
   });
@@ -787,6 +851,7 @@
         markup = sanitize(text);
         aspect = aspectOf(markup);
         build();
+        checkContrast();
         $("#hint").style.opacity = "0";
       })
       .catch(() => {});
