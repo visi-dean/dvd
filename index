@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bouncer — SVG screensaver</title>
+<meta name="description" content="Drop in any SVG and watch it bounce around the screen, waiting for the corner.">
+<style>
+  :root{
+    --osd:        #16202b;
+    --osd-edge:   rgba(255,255,255,.10);
+    --volt:       #29FF7A;
+    --volt-dim:   rgba(41,255,122,.55);
+    --blue:       #4272FF;
+    --ink:        #e8eef7;
+    --ink-dim:    rgba(232,238,247,.52);
+    --radius:     12px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; overflow:hidden;
+    background:#1F2933;
+    color:var(--ink);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+    touch-action:manipulation;
+  }
+  body.idle{cursor:none}
+
+  /* ---------- stage ---------- */
+  #stage{position:fixed; inset:0; overflow:hidden}
+  .logo,.ghost{
+    position:absolute; top:0; left:0;
+    will-change:transform;
+    transform-origin:50% 50%;
+    pointer-events:none;
+  }
+  .ghost{opacity:0}
+  .logo svg,.ghost svg{width:100%; height:100%; display:block; overflow:visible}
+
+  /* ---------- corner flash ---------- */
+  #flash{
+    position:fixed; inset:0; pointer-events:none; opacity:0;
+    background:radial-gradient(circle at var(--fx,50%) var(--fy,50%), rgba(255,255,255,.85), rgba(255,255,255,0) 55%);
+  }
+  #flash.hit{animation:pop .5s ease-out}
+  @keyframes pop{from{opacity:.9}to{opacity:0}}
+
+  /* ---------- CRT ---------- */
+  #crt{position:fixed; inset:0; pointer-events:none; display:none; z-index:3}
+  body.crt #crt{display:block}
+  #crt::before{
+    content:""; position:absolute; inset:0; opacity:.35;
+    background:repeating-linear-gradient(to bottom, rgba(0,0,0,.55) 0 1px, transparent 1px 3px);
+  }
+  #crt::after{
+    content:""; position:absolute; inset:0;
+    background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%);
+  }
+
+  /* ---------- counter ---------- */
+  #counter{
+    position:fixed; top:max(18px, env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+    z-index:4; text-align:center; pointer-events:none;
+    transition:opacity .4s ease;
+  }
+  #counter[hidden]{display:none}
+  #counter .n{
+    font-family:var(--mono); font-size:clamp(30px,6vw,54px); font-weight:600;
+    letter-spacing:.06em; color:var(--volt);
+    text-shadow:0 0 18px rgba(41,255,122,.4);
+    font-variant-numeric:tabular-nums;
+  }
+  #counter .n.bump{animation:bump .45s cubic-bezier(.2,1.6,.4,1)}
+  @keyframes bump{0%{transform:scale(1)}35%{transform:scale(1.35)}100%{transform:scale(1)}}
+  #counter .lbl{
+    font-family:var(--mono); font-size:10px; letter-spacing:.32em; text-transform:uppercase;
+    color:var(--ink-dim); margin-top:2px;
+  }
+
+  /* ---------- hint ---------- */
+  #hint{
+    position:fixed; bottom:calc(max(18px, env(safe-area-inset-bottom)) + 96px); left:50%;
+    transform:translateX(-50%); z-index:4;
+    font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--ink-dim); white-space:nowrap; pointer-events:none;
+    transition:opacity .6s ease;
+  }
+  body.idle #hint{opacity:0}
+
+  /* ---------- OSD bar ---------- */
+  #osd{
+    position:fixed; z-index:6;
+    left:50%; bottom:max(16px, env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    width:min(1120px, calc(100vw - 24px));
+    background:linear-gradient(180deg, rgba(31,41,51,.88), rgba(16,22,29,.94));
+    border:1px solid var(--osd-edge);
+    border-radius:var(--radius);
+    box-shadow:0 18px 60px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06);
+    backdrop-filter:blur(16px) saturate(1.3);
+    -webkit-backdrop-filter:blur(16px) saturate(1.3);
+    padding:12px 14px;
+    transition:opacity .32s ease, transform .32s ease;
+  }
+  body.idle #osd{opacity:0; transform:translateX(-50%) translateY(10px); pointer-events:none}
+
+  .row{display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap}
+  .row + .row{
+    margin-top:12px; padding-top:12px;
+    border-top:1px dashed rgba(255,255,255,.11);
+  }
+  #more-row{display:none}
+  #osd.open #more-row{display:flex}
+
+  .field{display:flex; flex-direction:column; gap:5px; min-width:0}
+  .field.grow{flex:1 1 130px}
+  .field .cap{
+    display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+    font-family:var(--mono); font-size:9.5px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--ink-dim);
+  }
+  .field .cap b{color:var(--volt); font-weight:500; font-variant-numeric:tabular-nums}
+
+  input[type=range]{
+    -webkit-appearance:none; appearance:none; width:100%; height:18px;
+    background:transparent; margin:0; cursor:ew-resize;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:3px; border-radius:2px; background:rgba(255,255,255,.16)}
+  input[type=range]::-moz-range-track{height:3px; border-radius:2px; background:rgba(255,255,255,.16)}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:13px; height:13px; border-radius:50%;
+    background:var(--volt); margin-top:-5px; border:none;
+    box-shadow:0 0 0 3px rgba(41,255,122,.18);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:13px; height:13px; border-radius:50%; background:var(--volt); border:none;
+    box-shadow:0 0 0 3px rgba(41,255,122,.18);
+  }
+
+  select, .btn, .swatch{
+    font-family:var(--mono); font-size:11px; letter-spacing:.08em;
+    color:var(--ink); background:rgba(255,255,255,.05);
+    border:1px solid var(--osd-edge); border-radius:8px;
+    padding:8px 10px; height:34px; cursor:pointer;
+    transition:border-color .15s ease, background .15s ease, color .15s ease;
+  }
+  select{appearance:none; padding-right:26px;
+    background-image:linear-gradient(45deg,transparent 50%,var(--ink-dim) 50%),linear-gradient(135deg,var(--ink-dim) 50%,transparent 50%);
+    background-position:calc(100% - 14px) 15px, calc(100% - 9px) 15px;
+    background-size:5px 5px,5px 5px; background-repeat:no-repeat;
+  }
+  select option{background:#16202b; color:var(--ink)}
+  .btn{display:inline-flex; align-items:center; gap:7px; white-space:nowrap; text-transform:uppercase}
+  .btn:hover, select:hover, .swatch:hover{background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.22)}
+  .btn.on{color:#0a0f18; background:var(--volt); border-color:var(--volt); font-weight:600}
+  .btn.primary{color:var(--volt); border-color:var(--volt-dim)}
+  .btn.primary:hover{background:rgba(41,255,122,.14)}
+
+  .swatch{padding:0; width:34px; overflow:hidden; position:relative}
+  .swatch input{
+    position:absolute; inset:-6px; width:calc(100% + 12px); height:calc(100% + 12px);
+    border:none; padding:0; background:transparent; cursor:pointer;
+  }
+
+  :where(button,select,input,a):focus-visible{outline:2px solid var(--blue); outline-offset:2px}
+
+  .sep{width:1px; align-self:stretch; background:rgba(255,255,255,.1); margin:2px 2px}
+
+  /* ---------- drop overlay ---------- */
+  #drop{
+    position:fixed; inset:12px; z-index:9; display:none; place-items:center;
+    border:2px dashed var(--volt); border-radius:16px;
+    background:rgba(6,9,15,.72); backdrop-filter:blur(4px);
+    font-family:var(--mono); font-size:13px; letter-spacing:.28em; text-transform:uppercase; color:var(--volt);
+  }
+  body.dragging #drop{display:grid}
+
+  /* ---------- toast ---------- */
+  #toast{
+    position:fixed; z-index:10; left:50%; top:50%; transform:translate(-50%,-50%);
+    background:var(--osd); border:1px solid rgba(255,80,80,.5); color:#ffd7d7;
+    font-family:var(--mono); font-size:12px; padding:12px 16px; border-radius:10px;
+    opacity:0; pointer-events:none; transition:opacity .3s ease; max-width:min(420px,80vw);
+  }
+  #toast.show{opacity:1}
+
+  @media (max-width:640px){
+    .field.grow{flex-basis:100px}
+    #hint{font-size:9px; letter-spacing:.12em}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001ms !important; transition-duration:.001ms !important}
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<div id="flash"></div>
+<div id="crt"></div>
+
+<div id="counter"><div class="n" id="count">0</div><div class="lbl">Corner hits</div></div>
+<div id="hint">Drop an SVG to swap the logo &nbsp;·&nbsp; H hides the bar &nbsp;·&nbsp; F fullscreen</div>
+
+<div id="drop">Release to load</div>
+<div id="toast"></div>
+
+<div id="osd">
+  <div class="row">
+    <button class="btn primary" id="load">Load SVG</button>
+    <input type="file" id="file" accept=".svg,image/svg+xml" hidden>
+
+    <div class="sep"></div>
+
+    <div class="field grow">
+      <span class="cap">Speed <b id="v-speed">220</b></span>
+      <input type="range" id="speed" min="20" max="1600" step="10" value="220">
+    </div>
+    <div class="field grow">
+      <span class="cap">Size <b id="v-size">180</b></span>
+      <input type="range" id="size" min="24" max="600" step="2" value="180">
+    </div>
+    <div class="field grow">
+      <span class="cap">Logos <b id="v-count">1</b></span>
+      <input type="range" id="count-r" min="1" max="12" step="1" value="1">
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="field">
+      <span class="cap">Colour</span>
+      <select id="mode">
+        <option value="original" selected>Keep original</option>
+        <option value="bounce">Change on bounce</option>
+        <option value="rainbow">Rainbow cycle</option>
+        <option value="solid">Single colour</option>
+      </select>
+    </div>
+    <div class="field">
+      <span class="cap">Ink</span>
+      <label class="swatch" title="Logo colour"><input type="color" id="ink" value="#29FF7A"></label>
+    </div>
+
+    <div class="sep"></div>
+
+    <button class="btn" id="full">Fullscreen</button>
+    <button class="btn" id="expand" aria-expanded="false">More ▸</button>
+  </div>
+
+  <div class="row" id="more-row">
+    <div class="field">
+      <span class="cap">Screen</span>
+      <label class="swatch" title="Background colour"><input type="color" id="bg" value="#1F2933"></label>
+    </div>
+    <div class="field grow">
+      <span class="cap">Trail <b id="v-trail">0</b></span>
+      <input type="range" id="trail" min="0" max="12" step="1" value="0">
+    </div>
+    <div class="field grow">
+      <span class="cap">Spin °/s <b id="v-spin">0</b></span>
+      <input type="range" id="spin" min="-360" max="360" step="5" value="0">
+    </div>
+    <div class="field grow">
+      <span class="cap">Bounce wobble <b id="v-jitter">0</b></span>
+      <input type="range" id="jitter" min="0" max="25" step="1" value="0">
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="field">
+      <span class="cap">Corner counts as</span>
+      <select id="corner">
+        <option value="loose" selected>Near miss (±120ms)</option>
+        <option value="strict">Perfect only</option>
+      </select>
+    </div>
+    <button class="btn on" id="t-counter">Counter</button>
+    <button class="btn on" id="t-flash">Flash</button>
+    <button class="btn" id="t-crt">CRT</button>
+
+    <div class="sep"></div>
+
+    <div class="field grow">
+      <span class="cap">Hide bar after <b id="v-hide">2.5s</b></span>
+      <input type="range" id="hide" min="1" max="15" step="0.5" value="2.5">
+    </div>
+    <button class="btn" id="t-pin" title="Stop the bar from hiding">Pin</button>
+    <button class="btn" id="pause">Pause</button>
+    <button class="btn" id="reset">Reshuffle</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ============================ defaults ============================
+     Edit these to change what the page looks like on first load.      */
+
+  // Loaded automatically at startup. Sits next to index.html in the repo.
+  const LOGO_URL = "assets/Visibuild - DVD Logo.svg";
+
+  const state = {
+    speed: 220,      // px per second
+    size: 180,       // logo height in px
+    count: 1,
+    mode: "original",// original | bounce | rainbow | solid
+    ink: "#29FF7A",
+    bg: "#1F2933",
+    trail: 0,        // ghost copies
+    spin: 0,         // deg per second
+    jitter: 0,       // deg of random angle change per bounce
+    corner: "loose", // loose | strict
+    counter: true,
+    flash: true,
+    crt: false,
+    hideAfter: 2500, // ms of no input before the bar goes away
+    pinned: false,
+    paused: false
+  };
+
+  // Visibuild palette, used by "Change on bounce"
+  const PALETTE = ["#29FF7A","#4272FF","#FF7A00","#BF70FF","#006E57","#F2F5FA"];
+  const SHAPES = "path,rect,circle,ellipse,line,polyline,polygon,text,tspan";
+  const SKIP = "defs,clipPath,mask,marker,pattern,symbol";
+  const GHOST_GAP = 3;            // frames between trail samples
+  const CORNER_WINDOW = 120;      // ms, for "near miss" corner detection
+  const MIN_ANGLE = 8;            // keep velocity this far off the axes
+
+  const DEFAULT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120">
+    <rect x="3" y="3" width="314" height="114" rx="18" fill="none" stroke="#e8eef7" stroke-width="6"/>
+    <text x="160" y="72" text-anchor="middle" font-family="ui-monospace,Menlo,monospace"
+          font-size="42" font-weight="700" letter-spacing="6" fill="#e8eef7">YOUR SVG</text>
+  </svg>`;
+
+  /* ============================ elements ============================ */
+  const $ = s => document.querySelector(s);
+  const stage = $("#stage"), osd = $("#osd"), flashEl = $("#flash");
+  const countEl = $("#count"), counterBox = $("#counter"), toastEl = $("#toast");
+
+  let markup = DEFAULT_SVG;
+  let aspect = 320 / 120;
+  let logos = [];
+  let corners = 0;
+  let lastTint = null;
+  let tintClock = 0;
+
+  /* ============================ svg intake ============================ */
+  function sanitize(text) {
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+    if (doc.querySelector("parsererror")) throw new Error("That file isn't valid SVG.");
+    const svg = doc.documentElement;
+    if (svg.nodeName.toLowerCase() !== "svg") throw new Error("No <svg> element found in that file.");
+
+    svg.querySelectorAll("script,foreignObject,iframe,animate,set").forEach(n => n.remove());
+    svg.querySelectorAll("*").forEach(el => {
+      [...el.attributes].forEach(a => {
+        const n = a.name.toLowerCase(), v = (a.value || "").toLowerCase();
+        if (n.startsWith("on") || v.includes("javascript:")) el.removeAttribute(a.name);
+      });
+    });
+
+    if (!svg.getAttribute("viewBox")) {
+      const w = parseFloat(svg.getAttribute("width")), h = parseFloat(svg.getAttribute("height"));
+      if (w > 0 && h > 0) svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      else svg.setAttribute("viewBox", "0 0 100 100");
+    }
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    return svg.outerHTML;
+  }
+
+  function aspectOf(html) {
+    const doc = new DOMParser().parseFromString(html, "image/svg+xml");
+    const vb = (doc.documentElement.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    return (vb.length === 4 && vb[2] > 0 && vb[3] > 0) ? vb[2] / vb[3] : 1;
+  }
+
+  function loadMarkup(text) {
+    try {
+      markup = sanitize(text);
+      aspect = aspectOf(markup);
+      build();
+      $("#hint").style.opacity = "0";
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  function loadFile(file) {
+    if (!file) return;
+    if (!/svg/i.test(file.type) && !/\.svg$/i.test(file.name)) {
+      return toast("That's not an SVG. Try a file ending in .svg");
+    }
+    const r = new FileReader();
+    r.onload = () => loadMarkup(String(r.result));
+    r.onerror = () => toast("Couldn't read that file.");
+    r.readAsText(file);
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3200);
+  }
+
+  /* ============================ tinting ============================ */
+  function paintable(root) {
+    const fills = [], strokes = [];
+    root.querySelectorAll(SHAPES).forEach(el => {
+      if (el.closest(SKIP)) return;
+      const cs = getComputedStyle(el);
+      if (cs.fill && cs.fill !== "none" && cs.fill !== "rgba(0, 0, 0, 0)") fills.push(el);
+      if (cs.stroke && cs.stroke !== "none" && cs.stroke !== "rgba(0, 0, 0, 0)") strokes.push(el);
+    });
+    return { fills, strokes };
+  }
+
+  function paint(target, colour) {
+    if (colour === null) {
+      target.fills.forEach(el => el.style.removeProperty("fill"));
+      target.strokes.forEach(el => el.style.removeProperty("stroke"));
+      return;
+    }
+    target.fills.forEach(el => el.style.setProperty("fill", colour, "important"));
+    target.strokes.forEach(el => el.style.setProperty("stroke", colour, "important"));
+  }
+
+  function colourOf(l) {
+    switch (state.mode) {
+      case "original": return null;
+      case "solid":    return state.ink;
+      case "rainbow":  return `hsl(${l.hue.toFixed(0)} 95% 62%)`;
+      default:         return PALETTE[l.ci % PALETTE.length];
+    }
+  }
+
+  function repaint(l) {
+    const c = colourOf(l);
+    paint(l.paint, c);
+    l.ghosts.forEach(g => paint(g.paint, c));
+  }
+
+  /* ============================ build ============================ */
+  function build() {
+    logos.forEach(l => l.wrap.remove());
+    logos.forEach(l => l.ghosts.forEach(g => g.el.remove()));
+    logos = [];
+
+    for (let i = 0; i < state.count; i++) {
+      const ghosts = [];
+      for (let g = 0; g < state.trail; g++) {
+        const el = document.createElement("div");
+        el.className = "ghost";
+        el.innerHTML = markup;
+        stage.appendChild(el);
+        ghosts.push({ el, paint: paintable(el) });
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "logo";
+      wrap.innerHTML = markup;
+      stage.appendChild(wrap);
+
+      const l = {
+        wrap, ghosts, paint: paintable(wrap),
+        x: 0, y: 0, vx: 0, vy: 0, w: 0, h: 0, angle: 0,
+        hue: Math.random() * 360, ci: (Math.random() * PALETTE.length) | 0,
+        tx: -1e9, ty: -1e9, hist: []
+      };
+      logos.push(l);
+      resize(l);
+      place(l);
+      repaint(l);
+    }
+  }
+
+  function resize(l) {
+    const maxH = Math.max(16, Math.min(state.size, innerHeight - 8, (innerWidth - 8) / aspect));
+    l.h = maxH;
+    l.w = maxH * aspect;
+    const dim = `width:${l.w}px;height:${l.h}px`;
+    l.wrap.style.cssText = `position:absolute;top:0;left:0;${dim}`;
+    l.ghosts.forEach(g => { g.el.style.width = l.w + "px"; g.el.style.height = l.h + "px"; });
+  }
+
+  function place(l) {
+    l.x = Math.random() * Math.max(1, innerWidth - l.w);
+    l.y = Math.random() * Math.max(1, innerHeight - l.h);
+    // pick an angle that isn't near-vertical or near-horizontal, so it actually wanders
+    const a = (20 + Math.random() * 50 + 90 * ((Math.random() * 4) | 0)) * Math.PI / 180;
+    l.vx = Math.cos(a) * state.speed;
+    l.vy = Math.sin(a) * state.speed;
+    l.hist.length = 0;
+  }
+
+  function retarget() {
+    logos.forEach(l => {
+      const s = Math.hypot(l.vx, l.vy) || 1;
+      l.vx = l.vx / s * state.speed;
+      l.vy = l.vy / s * state.speed;
+    });
+  }
+
+  /* ============================ physics ============================ */
+  function nudge(l) {
+    const s = Math.hypot(l.vx, l.vy) || state.speed;
+    let a = Math.atan2(l.vy, l.vx) * 180 / Math.PI;
+    if (state.jitter) a += (Math.random() * 2 - 1) * state.jitter;
+    // keep it off the axes
+    const q = ((a % 90) + 90) % 90;
+    if (q < MIN_ANGLE) a += (MIN_ANGLE - q);
+    else if (q > 90 - MIN_ANGLE) a -= (q - (90 - MIN_ANGLE));
+    const r = a * Math.PI / 180;
+    l.vx = Math.cos(r) * s;
+    l.vy = Math.sin(r) * s;
+  }
+
+  function bounce(l, hitX, hitY, now) {
+    if (hitX) l.tx = now;
+    if (hitY) l.ty = now;
+    nudge(l);
+
+    const both = hitX && hitY;
+    const near = state.corner === "loose" &&
+      ((hitX && now - l.ty < CORNER_WINDOW) || (hitY && now - l.tx < CORNER_WINDOW));
+
+    if (state.mode === "bounce") { l.ci = (l.ci + 1 + ((Math.random() * 3) | 0)) % PALETTE.length; repaint(l); }
+
+    if (both || near) cornerHit(l);
+  }
+
+  function cornerHit(l) {
+    corners++;
+    countEl.textContent = corners;
+    countEl.classList.remove("bump");
+    void countEl.offsetWidth;
+    countEl.classList.add("bump");
+    if (state.flash) {
+      flashEl.style.setProperty("--fx", ((l.x + l.w / 2) / innerWidth * 100) + "%");
+      flashEl.style.setProperty("--fy", ((l.y + l.h / 2) / innerHeight * 100) + "%");
+      flashEl.classList.remove("hit");
+      void flashEl.offsetWidth;
+      flashEl.classList.add("hit");
+    }
+  }
+
+  function step(dt, now) {
+    const W = innerWidth, H = innerHeight;
+    for (const l of logos) {
+      l.x += l.vx * dt;
+      l.y += l.vy * dt;
+      if (state.spin) l.angle = (l.angle + state.spin * dt) % 360;
+
+      let hitX = false, hitY = false;
+      if (l.x <= 0)            { l.x = 0;       l.vx = Math.abs(l.vx);  hitX = true; }
+      else if (l.x + l.w >= W) { l.x = W - l.w; l.vx = -Math.abs(l.vx); hitX = true; }
+      if (l.y <= 0)            { l.y = 0;       l.vy = Math.abs(l.vy);  hitY = true; }
+      else if (l.y + l.h >= H) { l.y = H - l.h; l.vy = -Math.abs(l.vy); hitY = true; }
+      if (hitX || hitY) bounce(l, hitX, hitY, now);
+
+      if (state.trail) {
+        l.hist.unshift({ x: l.x, y: l.y, a: l.angle });
+        const cap = state.trail * GHOST_GAP + 1;
+        if (l.hist.length > cap) l.hist.length = cap;
+      }
+    }
+
+    if (state.mode === "rainbow") {
+      tintClock += dt;
+      const advance = tintClock > 0.06;
+      for (const l of logos) {
+        l.hue = (l.hue + 70 * dt) % 360;
+        if (advance) repaint(l);
+      }
+      if (advance) tintClock = 0;
+    }
+  }
+
+  function render() {
+    for (const l of logos) {
+      l.wrap.style.transform = `translate3d(${l.x}px,${l.y}px,0) rotate(${l.angle}deg)`;
+      for (let i = 0; i < l.ghosts.length; i++) {
+        const h = l.hist[(i + 1) * GHOST_GAP];
+        const g = l.ghosts[i].el;
+        if (!h) { g.style.opacity = "0"; continue; }
+        g.style.opacity = String((1 - (i + 1) / (state.trail + 1)) * 0.45);
+        g.style.transform = `translate3d(${h.x}px,${h.y}px,0) rotate(${h.a}deg)`;
+      }
+    }
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (!state.paused) step(dt, now);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  /* ============================ auto-hiding bar ============================ */
+  let idleTimer, hovering = false, wokeFromHidden = false;
+  function wake() {
+    wokeFromHidden = document.body.classList.contains("idle");
+    document.body.classList.remove("idle");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (state.pinned || hovering || osd.contains(document.activeElement)) return;
+      document.body.classList.add("idle");
+    }, state.hideAfter);
+  }
+  osd.addEventListener("pointerenter", () => { hovering = true; wake(); });
+  osd.addEventListener("pointerleave", () => { hovering = false; wake(); });
+  ["pointermove","pointerdown","wheel","keydown","touchstart"].forEach(ev =>
+    addEventListener(ev, wake, { passive: true }));
+
+  /* ============================ controls ============================ */
+  const range = (id, key, fmt, after) => {
+    const el = $("#" + id), out = $("#v-" + id.replace("-r",""));
+    el.value = state[key];
+    if (out) out.textContent = fmt ? fmt(state[key]) : state[key];
+    el.addEventListener("input", () => {
+      state[key] = parseFloat(el.value);
+      if (out) out.textContent = fmt ? fmt(state[key]) : state[key];
+      after && after();
+    });
+  };
+  const toggle = (id, key, after) => {
+    const el = $("#" + id);
+    el.classList.toggle("on", !!state[key]);
+    el.addEventListener("click", () => {
+      state[key] = !state[key];
+      el.classList.toggle("on", state[key]);
+      after && after();
+    });
+  };
+
+  range("speed", "speed", null, retarget);
+  range("size", "size", null, () => logos.forEach(resize));
+  range("count-r", "count", null, build);
+  range("trail", "trail", null, build);
+  range("spin", "spin");
+  range("jitter", "jitter");
+  // the hide slider works in seconds, state stores milliseconds
+  $("#hide").value = state.hideAfter / 1000;
+  $("#v-hide").textContent = (state.hideAfter / 1000) + "s";
+  $("#hide").addEventListener("input", e => {
+    state.hideAfter = parseFloat(e.target.value) * 1000;
+    $("#v-hide").textContent = parseFloat(e.target.value) + "s";
+    wake();
+  });
+
+  $("#mode").value = state.mode;
+  $("#mode").addEventListener("change", e => { state.mode = e.target.value; logos.forEach(repaint); });
+
+  $("#ink").value = state.ink;
+  $("#ink").addEventListener("input", e => {
+    state.ink = e.target.value;
+    if (state.mode === "solid") logos.forEach(repaint);
+  });
+
+  $("#bg").value = state.bg;
+  $("#bg").addEventListener("input", e => { state.bg = e.target.value; document.body.style.background = state.bg; });
+
+  $("#corner").value = state.corner;
+  $("#corner").addEventListener("change", e => { state.corner = e.target.value; });
+
+  toggle("t-counter", "counter", () => counterBox.hidden = !state.counter);
+  toggle("t-flash", "flash");
+  toggle("t-crt", "crt", () => document.body.classList.toggle("crt", state.crt));
+  toggle("t-pin", "pinned", wake);
+
+  $("#pause").addEventListener("click", e => {
+    state.paused = !state.paused;
+    e.currentTarget.textContent = state.paused ? "Resume" : "Pause";
+    e.currentTarget.classList.toggle("on", state.paused);
+  });
+  $("#reset").addEventListener("click", () => { corners = 0; countEl.textContent = "0"; logos.forEach(place); });
+  $("#load").addEventListener("click", () => $("#file").click());
+  $("#file").addEventListener("change", e => { loadFile(e.target.files[0]); e.target.value = ""; });
+
+  $("#expand").addEventListener("click", e => {
+    const open = osd.classList.toggle("open");
+    e.currentTarget.textContent = open ? "Less ◂" : "More ▸";
+    e.currentTarget.setAttribute("aria-expanded", String(open));
+  });
+
+  $("#full").addEventListener("click", toggleFullscreen);
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.().catch(() => toast("Fullscreen was blocked by the browser."));
+  }
+  document.addEventListener("fullscreenchange", () => {
+    $("#full").textContent = document.fullscreenElement ? "Exit full" : "Fullscreen";
+  });
+
+  /* ============================ input ============================ */
+  addEventListener("keydown", e => {
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || "")) return;
+    const k = e.key.toLowerCase();
+    if (k === " ") { e.preventDefault(); $("#pause").click(); }
+    else if (k === "f") toggleFullscreen();
+    else if (k === "r") $("#reset").click();
+    else if (k === "h") {
+      // the global wake() handler already ran; only hide if the bar was already showing
+      if (!wokeFromHidden) {
+        state.pinned = false;
+        $("#t-pin").classList.remove("on");
+        clearTimeout(idleTimer);
+        document.body.classList.add("idle");
+      }
+    }
+    else if (k === "o") $("#load").click();
+  });
+
+  ["dragenter","dragover"].forEach(ev => addEventListener(ev, e => {
+    e.preventDefault(); document.body.classList.add("dragging");
+  }));
+  ["dragleave","dragend"].forEach(ev => addEventListener(ev, e => {
+    if (e.relatedTarget) return;
+    document.body.classList.remove("dragging");
+  }));
+  addEventListener("drop", e => {
+    e.preventDefault();
+    document.body.classList.remove("dragging");
+    const f = e.dataTransfer?.files?.[0];
+    if (f) return loadFile(f);
+    const t = e.dataTransfer?.getData("text");
+    if (t && t.includes("<svg")) loadMarkup(t);
+  });
+  addEventListener("paste", e => {
+    const f = e.clipboardData?.files?.[0];
+    if (f) return loadFile(f);
+    const t = e.clipboardData?.getData("text") || "";
+    if (t.includes("<svg")) loadMarkup(t);
+  });
+
+  let resizeTimer;
+  addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      logos.forEach(l => {
+        resize(l);
+        l.x = Math.min(l.x, Math.max(0, innerWidth - l.w));
+        l.y = Math.min(l.y, Math.max(0, innerHeight - l.h));
+      });
+    }, 120);
+  });
+
+  /* ============================ go ============================ */
+  document.body.style.background = state.bg;
+  document.body.classList.toggle("crt", state.crt);
+  counterBox.hidden = !state.counter;
+  build();
+  wake();
+  requestAnimationFrame(loop);
+  setTimeout(() => { $("#hint").style.opacity = "0"; }, 9000);
+
+  // Pull in the bundled logo. Placeholder stays put if it isn't there,
+  // or if the page was opened straight off disk (file:// blocks fetch).
+  if (location.protocol !== "file:") {
+    fetch(encodeURI(LOGO_URL), { cache: "no-cache" })
+      .then(r => r.ok ? r.text() : Promise.reject())
+      .then(text => {
+        markup = sanitize(text);
+        aspect = aspectOf(markup);
+        build();
+        $("#hint").style.opacity = "0";
+      })
+      .catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
