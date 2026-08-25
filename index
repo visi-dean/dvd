@@ -69,6 +69,9 @@
     transition:opacity .4s ease;
   }
   #counter[hidden]{display:none}
+  body.idle #counter{opacity:0}
+  /* a corner hit is the payoff, so it surfaces the tally briefly even in idle */
+  body.idle #counter.reveal{opacity:1}
   #counter .n{
     font-family:var(--mono); font-size:clamp(30px,6vw,54px); font-weight:600;
     letter-spacing:.06em; color:var(--volt);
@@ -537,12 +540,18 @@
     if (both || near) cornerHit(l);
   }
 
+  let revealTimer;
   function cornerHit(l) {
     corners++;
     countEl.textContent = corners;
     countEl.classList.remove("bump");
     void countEl.offsetWidth;
     countEl.classList.add("bump");
+
+    counterBox.classList.add("reveal");
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(() => counterBox.classList.remove("reveal"), 2500);
+
     if (state.flash) {
       flashEl.style.setProperty("--fx", ((l.x + l.w / 2) / innerWidth * 100) + "%");
       flashEl.style.setProperty("--fy", ((l.y + l.h / 2) / innerHeight * 100) + "%");
@@ -618,7 +627,12 @@
     }, state.hideAfter);
   }
   osd.addEventListener("pointerenter", () => { hovering = true; wake(); });
-  osd.addEventListener("pointerleave", () => { hovering = false; wake(); });
+  osd.addEventListener("pointerleave", () => {
+    hovering = false;
+    // the bar going pointer-events:none under a resting cursor also fires this;
+    // don't let that bring it straight back
+    if (!document.body.classList.contains("idle")) wake();
+  });
   ["pointermove","pointerdown","wheel","keydown","touchstart"].forEach(ev =>
     addEventListener(ev, wake, { passive: true }));
 
