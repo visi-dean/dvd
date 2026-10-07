@@ -32,40 +32,53 @@
   body.idle{cursor:none}
 
   /* ---------- fireworks ---------- */
-  #fw{position:fixed; inset:0; width:100%; height:100%; pointer-events:none; display:block}
+  #fw{position:fixed; top:0; right:0; bottom:0; left:0; width:100%; height:100%; pointer-events:none; display:block}
 
   /* ---------- stage ---------- */
-  #stage{position:fixed; inset:0; overflow:hidden}
+  #stage{position:fixed; top:0; right:0; bottom:0; left:0; overflow:hidden}
   .logo,.ghost{
-    position:absolute; top:0; left:0;
+    position:absolute; top:0; left:0; overflow:visible;
     will-change:transform;
     transform-origin:50% 50%;
     pointer-events:none;
   }
   .ghost{opacity:0}
-  #fx-defs{position:absolute; width:0; height:0; overflow:hidden}
-  body:not(.iri) .bn-shine{display:none}
-  /* soft halo so the foil reads as light-emitting on black */
-  body.iri .logo svg{filter:drop-shadow(0 0 14px hsla(var(--glow-h, 260), 100%, 65%, .38))}
-  .logo svg,.ghost svg{width:100%; height:100%; display:block; overflow:visible}
+  /* the foil: a small canvas of moving colour, cut to the logo's shape by a
+     static mask. The GPU scales and masks it, so nothing gets re-rasterised. */
+  .foil{
+    position:absolute; top:0; left:0; width:100%; height:100%; display:block;
+    -webkit-mask-size:100% 100%; mask-size:100% 100%;
+    -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+  }
+  body:not(.iri) .foil{display:none}
+  .logo svg,.ghost svg{width:100%; height:100%; display:block; overflow:visible; position:relative}
+  /* Soft halo so the foil reads as light-emitting on black. A plain radial
+     gradient behind the mark, not a blur filter: filters get recomputed every
+     time the colours change, which is far too heavy for TV and set-top GPUs. */
+  body.iri .logo::before{
+    content:""; position:absolute; top:-30%; bottom:-30%; left:-8%; right:-8%;
+    background:radial-gradient(closest-side, hsla(var(--glow-h, 260), 100%, 62%, .26), hsla(var(--glow-h, 260), 100%, 62%, 0));
+    pointer-events:none;
+  }
+  body.lowfx .logo::before{display:none}
 
   /* ---------- corner flash ---------- */
   #flash{
-    position:fixed; inset:0; pointer-events:none; opacity:0;
+    position:fixed; top:0; right:0; bottom:0; left:0; pointer-events:none; opacity:0;
     background:radial-gradient(circle at var(--fx,50%) var(--fy,50%), rgba(255,255,255,.85), rgba(255,255,255,0) 55%);
   }
   #flash.hit{animation:pop .5s ease-out}
   @keyframes pop{from{opacity:.9}to{opacity:0}}
 
   /* ---------- CRT ---------- */
-  #crt{position:fixed; inset:0; pointer-events:none; display:none; z-index:3}
+  #crt{position:fixed; top:0; right:0; bottom:0; left:0; pointer-events:none; display:none; z-index:3}
   body.crt #crt{display:block}
   #crt::before{
-    content:""; position:absolute; inset:0; opacity:.35;
+    content:""; position:absolute; top:0; right:0; bottom:0; left:0; opacity:.35;
     background:repeating-linear-gradient(to bottom, rgba(0,0,0,.55) 0 1px, transparent 1px 3px);
   }
   #crt::after{
-    content:""; position:absolute; inset:0;
+    content:""; position:absolute; top:0; right:0; bottom:0; left:0;
     background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%);
   }
 
@@ -115,9 +128,10 @@
     backdrop-filter:blur(16px) saturate(1.3);
     -webkit-backdrop-filter:blur(16px) saturate(1.3);
     padding:12px 14px;
-    transition:opacity .32s ease, transform .32s ease;
+    transition:opacity .32s ease, transform .32s ease, visibility 0s linear 0s;
   }
-  body.idle #osd{opacity:0; transform:translateX(-50%) translateY(10px); pointer-events:none}
+  body.idle #osd{opacity:0; transform:translateX(-50%) translateY(10px); pointer-events:none;
+    visibility:hidden; transition:opacity .32s ease, transform .32s ease, visibility 0s linear .32s}
 
   .row{display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap}
   .row + .row{
@@ -188,7 +202,7 @@
 
   .swatch{padding:0; width:34px; overflow:hidden; position:relative}
   .swatch input{
-    position:absolute; inset:-6px; width:calc(100% + 12px); height:calc(100% + 12px);
+    position:absolute; top:-6px; left:-6px; width:calc(100% + 12px); height:calc(100% + 12px);
     border:none; padding:0; background:transparent; cursor:pointer;
   }
 
@@ -198,7 +212,7 @@
 
   /* ---------- drop overlay ---------- */
   #drop{
-    position:fixed; inset:12px; z-index:9; display:none; place-items:center;
+    position:fixed; top:12px; right:12px; bottom:12px; left:12px; z-index:9; display:none; place-items:center;
     border:2px dashed var(--volt); border-radius:16px;
     background:rgba(6,9,15,.72); backdrop-filter:blur(4px);
     font-family:var(--mono); font-size:13px; letter-spacing:.28em; text-transform:uppercase; color:var(--volt);
@@ -225,30 +239,7 @@
 </head>
 <body>
 
-<svg id="fx-defs" aria-hidden="true" focusable="false">
-  <defs>
-    <!-- holographic foil: stops are generated and morphed by the script -->
-    <linearGradient id="iri-flow" gradientUnits="userSpaceOnUse" spreadMethod="repeat"></linearGradient>
-    <!-- the logo's actual fill: drifting colour blobs over the flowing foil.
-         The script sizes it to the artwork and moves the blobs every frame. -->
-    <pattern id="iri-blobs" patternUnits="userSpaceOnUse" patternContentUnits="userSpaceOnUse">
-      <g id="iri-content"><rect id="iri-base" fill="url(#iri-flow)"/></g>
-    </pattern>
-    <!-- the beam: a broad, soft band of light. spreadMethod="repeat" means a
-         new beam enters as the last one leaves, at a constant pace -->
-    <linearGradient id="iri-shine" gradientUnits="userSpaceOnUse" spreadMethod="repeat">
-      <stop offset="0"   stop-color="#ff2d6f" stop-opacity="0"/>
-      <stop offset=".28" stop-color="#ff2d6f" stop-opacity="0"/>
-      <stop offset=".35" stop-color="#ff7a2d" stop-opacity=".22"/>
-      <stop offset=".42" stop-color="#fff3b0" stop-opacity=".5"/>
-      <stop offset=".5"  stop-color="#ffffff" stop-opacity=".8"/>
-      <stop offset=".58" stop-color="#b8fbff" stop-opacity=".5"/>
-      <stop offset=".65" stop-color="#2d8bff" stop-opacity=".22"/>
-      <stop offset=".72" stop-color="#8a2dff" stop-opacity="0"/>
-      <stop offset="1"   stop-color="#8a2dff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-</svg>
+<style id="foil-mask"></style>
 
 <canvas id="fw"></canvas>
 <div id="stage"></div>
@@ -298,6 +289,15 @@
       <select id="colour">
         <option value="iridescent" selected>Iridescent</option>
         <option value="rainbow">Rainbow on bounce</option>
+      </select>
+    </div>
+    <div class="field">
+      <span class="cap">Quality <b id="v-quality"></b></span>
+      <select id="quality" title="Auto steps down if the screen can't keep up">
+        <option value="auto" selected>Auto</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low (TVs)</option>
       </select>
     </div>
     <div class="field grow">
@@ -360,6 +360,7 @@
     count: 1,
     bg: "#000000",
     colour: "iridescent", // iridescent = shimmering foil | rainbow = classic colour-per-bounce
+    quality: "auto",      // auto | high | medium | low  (also ?quality=low in the URL)
     trail: 0,        // ghost copies
     spin: 0,         // deg per second
     jitter: 0,       // deg of random angle change per bounce
@@ -544,96 +545,60 @@
   }
 
   function repaint(l) {
-    const c = state.colour === "iridescent" ? "url(#iri-blobs)" : PALETTE[l.ci % PALETTE.length];
+    const c = state.colour === "iridescent" ? "transparent" : PALETTE[l.ci % PALETTE.length];
     paint(l.paint, c);
     l.ghosts.forEach(g => paint(g.paint, c));
   }
 
   /* ============================ iridescence ============================
-     Two shared gradients live in #fx-defs. They use userSpaceOnUse, so the
-     coordinates are the artwork's own viewBox units: the colour field and the
-     glint sweep across the whole mark as one surface, not shape by shape.
-       shine - a broad beam of light that glides across at a steady pace,
-               one after another with no pauses
-       flow  - the foil colours, which travel in the same direction as the
-               beam but slower, so the colour shifts as the light moves over it
-     A copy of each dark shape is laid on top of the original and filled with
-     the shine, so the glint follows the exact silhouette (knockouts too).  */
+     How it's drawn (and why): the colour is painted into ONE small offscreen
+     canvas, a couple of hundred pixels wide, then copied into a canvas inside
+     each logo. Each of those is cut to the logo's silhouette by a CSS mask that
+     never changes. The GPU just stretches and masks a tiny texture, so even
+     TVs and streaming sticks keep up. (The earlier version animated SVG
+     gradients and a pattern, which forces the browser to re-rasterise the
+     whole logo every frame: smooth on a laptop, stuttery on a TV.)
+
+     Layers, bottom to top:
+       wash  - a slow, broad rainbow drift so there are never dull gaps
+       blobs - soft colour blobs wandering, breathing and changing hue
+       beam  - a broad prism-edged band of light gliding across at a constant
+               pace, one after another with no pauses
+     Light shapes in a logo (knockouts drawn in white, say) are left out of the
+     mask and stay visible in the SVG on top, in their own colour.          */
   const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const BEAM_PERIOD = 7;    // seconds for each beam to cross the logo (bigger = slower)
   const BEAM_WIDTH = 1.15;  // spacing between beams, relative to the logo's width
-  const FLOW_PERIOD = 28;   // seconds for the colours to go all the way round
+  const FLOW_PERIOD = 28;   // seconds for the background wash to go all the way round
   const HUE_PERIOD = 45;    // seconds for the whole palette to rotate through the spectrum
   const MORPH_PERIOD = 17;  // seconds for each colour to swell and recede
   const MORPH_DEPTH = 34;   // degrees of hue each colour wanders while morphing
   const SATURATION = 100;   // %: chroma of the foil
   const LIGHTNESS = 62;     // %: around 60 is vivid on black without going pastel
-  const STOPS = 13;         // more stops = smoother spectrum
   const BLOBS = 13;         // colour blobs drifting over the logo
   const BLOB_SIZE = 0.72;   // blob radius, relative to the logo's height
   const BLOB_DRIFT = 30;    // rough seconds for a blob to wander across and back
 
+  // beam colour profile across one band: warm trailing fringe, white core, cool leading fringe
+  const BEAM_STOPS = [
+    [0,   "255,45,111",  0],  [.28, "255,45,111",  0],  [.35, "255,122,45",  .22],
+    [.42, "255,243,176", .5], [.5,  "255,255,255", .8], [.58, "184,251,255", .5],
+    [.65, "45,139,255",  .22],[.72, "138,45,255",  0],  [1,   "138,45,255",  0]
+  ];
+
   const sheen = (() => {
-    const flow = $("#iri-flow"), shine = $("#iri-shine");
-    let vb = [0, 0, 100, 100];
-    const set = (el, a, b, c, d) => {
-      el.setAttribute("x1", a.toFixed(2)); el.setAttribute("y1", b.toFixed(2));
-      el.setAttribute("x2", c.toFixed(2)); el.setAttribute("y2", d.toFixed(2));
-    };
-    // the beam leans like "/" ; its travel direction is perpendicular to that lean
-    // build the foil's stops once; frame() recolours them
-    const stops = [];
-    for (let i = 0; i < STOPS; i++) {
-      const st = document.createElementNS("http://www.w3.org/2000/svg", "stop");
-      st.setAttribute("offset", (i / (STOPS - 1)).toFixed(4));
-      flow.appendChild(st);
-      stops.push(st);
-    }
+    const src = document.createElement("canvas");
+    const sx = src.getContext("2d");
+    const maskStyle = $("#foil-mask");
+    let vb = [0, 0, 100, 100], res = 256, CW = 1, CH = 1, k = 1;
+    let activeBlobs = BLOBS, lastGlow = -1;
+    const targets = new Set();                 // canvases inside logos and ghosts
 
-    // A full spectrum across the band, rotating slowly. Each stop also drifts
-    // in hue and brightness on its own wave, so neighbouring colours bloom into
-    // each other instead of sliding past rigidly. Stop phases are spaced by a
-    // full turn, so the first and last stop always match and the repeat stays seamless.
-    function recolour(t) {
-      const base = (t / HUE_PERIOD) * 360;
-      const w = (t / MORPH_PERIOD) * Math.PI * 2;
-      for (let i = 0; i < STOPS; i++) {
-        const k = i / (STOPS - 1), ph = k * Math.PI * 2;
-        const h = base + k * 360
-          + MORPH_DEPTH * Math.sin(w + ph * 2)
-          + MORPH_DEPTH * 0.5 * Math.sin(w * 0.61 + ph * 3);
-        const l = LIGHTNESS + 7 * Math.sin(w * 0.8 + ph * 2);
-        stops[i].setAttribute("stop-color",
-          `hsl(${(((h % 360) + 360) % 360).toFixed(1)}, ${SATURATION}%, ${l.toFixed(1)}%)`);
-      }
-      document.body.style.setProperty("--glow-h", (((base + 200) % 360)).toFixed(0));
-    }
-
-    /* ---- blobs ----
-       Each blob is a circle filled with a soft radial gradient (solid centre,
-       feathered edge), so overlapping blobs melt into each other like ink in
-       water. They wander on slow, never-quite-repeating paths (two sine waves
-       per axis at unrelated speeds), breathe in size, and shift hue on their own. */
-    const NS = "http://www.w3.org/2000/svg";
-    const pattern = $("#iri-blobs"), base = $("#iri-base"), content = $("#iri-content"), defs = flow.parentNode;
-    const rnd = (i, k) => { const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return v - Math.floor(v); };
+    const rnd = (i, n) => { const v = Math.sin(i * 127.1 + n * 311.7) * 43758.5453; return v - Math.floor(v); };
     const blobs = [];
     for (let i = 0; i < BLOBS; i++) {
-      const g = document.createElementNS(NS, "radialGradient");
-      g.id = "iri-blob-" + i;
-      const st = [0, .45, .75, 1].map(o => {
-        const e = document.createElementNS(NS, "stop");
-        e.setAttribute("offset", o);
-        g.appendChild(e);
-        return e;
-      });
-      defs.appendChild(g);
-      const c = document.createElementNS(NS, "circle");
-      c.setAttribute("fill", `url(#${g.id})`);
-      content.appendChild(c);
       const sp = (Math.PI * 2) / BLOB_DRIFT;
       blobs.push({
-        c, st,
         hue: (i * 137.508) % 360,                       // golden-angle spread: no two alike
         ax: sp * (0.6 + rnd(i, 1) * 0.8), px: rnd(i, 2) * 6.283,
         bx: sp * (1.3 + rnd(i, 3) * 0.9), qx: rnd(i, 4) * 6.283,
@@ -644,85 +609,163 @@
       });
     }
 
-    function moveBlobs(t) {
-      const [x, y, w, h] = vb;
-      const hueBase = (t / HUE_PERIOD) * 360;
-      const mw = (t / MORPH_PERIOD) * Math.PI * 2;
-      for (let i = 0; i < blobs.length; i++) {
-        const b = blobs[i];
-        // spread starting lanes across the width so the whole mark stays covered
-        const lane = (i + 0.5) / blobs.length;
-        const ux = lane + 0.32 * Math.sin(t * b.ax + b.px) + 0.14 * Math.sin(t * b.bx + b.qx);
-        const uy = 0.5 + 0.55 * Math.sin(t * b.ay + b.py) + 0.2 * Math.sin(t * b.by + b.qy);
-        const fx = ux;                                 // may drift past the edges, never jumps
-        const r = h * BLOB_SIZE * b.size * (1 + 0.22 * Math.sin(t * b.br + b.pr));
-        b.c.setAttribute("cx", (x + fx * w).toFixed(1));
-        b.c.setAttribute("cy", (y + uy * h).toFixed(1));
-        b.c.setAttribute("r", r.toFixed(1));
+    // the beam leans like "/" ; it travels perpendicular to that lean
+    const BN = Math.hypot(0.94, 0.34), bx = 0.94 / BN, by = 0.34 / BN;
+    const wrap01 = v => ((v % 1) + 1) % 1;
+    const hsl = (h, l, a) => `hsla(${(((h % 360) + 360) % 360).toFixed(1)},${SATURATION}%,${l.toFixed(1)}%,${a})`;
 
-        const hue = (((hueBase + b.hue + MORPH_DEPTH * 1.5 * Math.sin(mw + i)) % 360) + 360) % 360;
-        const l = LIGHTNESS + 6 * Math.sin(mw * 0.7 + i * 1.9);
-        const col = `hsl(${hue.toFixed(1)}, ${SATURATION}%, ${l.toFixed(1)}%)`;
-        [1, .8, .35, 0].forEach((a, k) => {
-          b.st[k].setAttribute("stop-color", col);
-          b.st[k].setAttribute("stop-opacity", a);
-        });
-      }
+    function size() {
+      const aspect = vb[2] / vb[3];
+      if (aspect >= 1) { CW = res; CH = Math.max(16, Math.round(res / aspect)); }
+      else { CH = res; CW = Math.max(16, Math.round(res * aspect)); }
+      k = CW / vb[2];
+      src.width = CW; src.height = CH;
+      targets.forEach(c => { c.width = CW; c.height = CH; });
     }
-
-    function fitPattern() {
-      const [x, y, w, h] = vb;
-      // a generous margin so shapes that poke past the viewBox aren't tiled
-      const m = Math.max(w, h);
-      [[pattern, "x", x - m], [pattern, "y", y - m], [pattern, "width", w + 2 * m], [pattern, "height", h + 2 * m],
-       [base, "x", x - m], [base, "y", y - m], [base, "width", w + 2 * m], [base, "height", h + 2 * m]]
-        .forEach(([el, a, v]) => el.setAttribute(a, v.toFixed(2)));
-      // pattern content is drawn relative to the tile's corner; shift it back so
-      // everything inside can use the artwork's own coordinates
-      content.setAttribute("transform", `translate(${(m - x).toFixed(2)} ${(m - y).toFixed(2)})`);
-    }
-
-    const BX = 0.94, BY = 0.34, BN = Math.hypot(BX, BY);
-    const bx = BX / BN, by = BY / BN;
 
     function frame(now) {
       const t = now / 1000;
       const [x, y, w, h] = vb, cx = x + w / 2, cy = y + h / 2;
       const across = w * bx + h * by;           // logo's length along the beam's path
+      const hueBase = (t / HUE_PERIOD) * 360;
+      const mw = (t / MORPH_PERIOD) * Math.PI * 2;
+      sx.setTransform(k, 0, 0, k, -x * k, -y * k); // draw in the artwork's own units
+      sx.globalAlpha = 1;
 
-      // beam: constant speed, shifting a whole repeat per period, so it never jumps
-      const gap = across * BEAM_WIDTH;
-      const bOff = ((t / BEAM_PERIOD) % 1) * gap - gap / 2;
-      const sx = cx + bx * bOff, sy = cy + by * bOff;
-      set(shine, sx, sy, sx + bx * gap, sy + by * gap);
-
-      // colour: rides the same direction as the beam, more slowly, with a gentle tilt
+      // 1. wash: the full spectrum along a slowly tilting line, morphing as it goes
       const ang = Math.atan2(by, bx) + (8 * Math.sin(t * 0.09)) * Math.PI / 180;
       const dx = Math.cos(ang), dy = Math.sin(ang);
-      const period = across * 1.8;  // wide, soft wash beneath the blobs
-      const fOff = ((t / FLOW_PERIOD) % 1) * period - period / 2;
-      const fx = cx + dx * fOff, fy = cy + dy * fOff;
-      set(flow, fx, fy, fx + dx * period, fy + dy * period);
-      recolour(t);
-      moveBlobs(t);
+      const period = across * 1.8, half = across * 0.6;
+      const fOff = wrap01(t / FLOW_PERIOD) * period;
+      const wash = sx.createLinearGradient(cx - dx * half, cy - dy * half, cx + dx * half, cy + dy * half);
+      for (let j = 0; j <= 16; j++) {
+        const u = wrap01((-half + 2 * half * j / 16 - fOff) / period), ph = u * Math.PI * 2;
+        const hue = hueBase + u * 360 + MORPH_DEPTH * Math.sin(mw + ph * 2) + MORPH_DEPTH * 0.5 * Math.sin(mw * 0.61 + ph * 3);
+        wash.addColorStop(j / 16, hsl(hue, LIGHTNESS + 7 * Math.sin(mw * 0.8 + ph * 2), 1));
+      }
+      sx.fillStyle = wash;
+      sx.fillRect(x, y, w, h);
+
+      // 2. blobs
+      for (let i = 0; i < activeBlobs; i++) {
+        const b = blobs[i];
+        const lane = (i + 0.5) / activeBlobs;    // spread across the width so it's all covered
+        const ux = lane + 0.32 * Math.sin(t * b.ax + b.px) + 0.14 * Math.sin(t * b.bx + b.qx);
+        const uy = 0.5 + 0.55 * Math.sin(t * b.ay + b.py) + 0.2 * Math.sin(t * b.by + b.qy);
+        const bcx = x + ux * w, bcy = y + uy * h;
+        const r = h * BLOB_SIZE * b.size * (1 + 0.22 * Math.sin(t * b.br + b.pr)) * Math.sqrt(BLOBS / activeBlobs);
+        const hue = hueBase + b.hue + MORPH_DEPTH * 1.5 * Math.sin(mw + i);
+        const l = LIGHTNESS + 6 * Math.sin(mw * 0.7 + i * 1.9);
+        const g = sx.createRadialGradient(bcx, bcy, 0, bcx, bcy, r);
+        g.addColorStop(0, hsl(hue, l, 1));
+        g.addColorStop(.45, hsl(hue, l, .8));
+        g.addColorStop(.75, hsl(hue, l, .35));
+        g.addColorStop(1, hsl(hue, l, 0));
+        sx.fillStyle = g;
+        sx.fillRect(bcx - r, bcy - r, r * 2, r * 2);
+      }
+
+      // 3. beam: constant speed; a new band starts as the last one leaves
+      if (!STILL) {
+        const gap = across * BEAM_WIDTH;
+        const s0 = wrap01(t / BEAM_PERIOD) * gap - gap / 2;
+        for (let n = -2; n <= 1; n++) {
+          const a = s0 + n * gap, z = a + gap;
+          if (z < -across / 2 || a > across / 2) continue;
+          const g = sx.createLinearGradient(cx + bx * a, cy + by * a, cx + bx * z, cy + by * z);
+          BEAM_STOPS.forEach(([o, c, al]) => g.addColorStop(o, `rgba(${c},${al})`));
+          sx.fillStyle = g;
+          sx.fillRect(x, y, w, h);
+        }
+      }
+
+      // halo colour: only touch the style when the hue actually changes
+      const gh = Math.round(((hueBase + 200) % 360 + 360) % 360);
+      if (gh !== lastGlow) { lastGlow = gh; stage.style.setProperty("--glow-h", gh); }
+
+      targets.forEach(c => c.getContext("2d").drawImage(src, 0, 0));
     }
 
-    // new artwork means new user-space units; refit and draw one frame
-    function fit(html) { vb = viewBoxOf(html); fitPattern(); frame(STILL ? 2600 : performance.now()); }
+    function attach(holder) {
+      const c = document.createElement("canvas");
+      c.className = "foil";
+      c.width = CW; c.height = CH;
+      holder.insertBefore(c, holder.firstChild);
+      targets.add(c);
+      return c;
+    }
+    function detach(holder) { holder.querySelectorAll("canvas.foil").forEach(c => targets.delete(c)); }
 
-    return { frame, fit };
+    // Build the silhouette mask from a live logo: dark shapes solid, light
+    // shapes left out (they show through from the SVG on top).
+    function setMask(holder, target) {
+      target.fills.forEach(f => f.el.setAttribute("data-bn-f", f.light ? "L" : "D"));
+      target.strokes.forEach(st => st.el.setAttribute("data-bn-s", st.light ? "L" : "D"));
+      const clone = holder.querySelector("svg").cloneNode(true);
+      clone.querySelectorAll("[data-bn-f],[data-bn-s]").forEach(el => {
+        const f = el.getAttribute("data-bn-f"), st = el.getAttribute("data-bn-s");
+        if (f !== "D" && st !== "D") { el.remove(); return; }
+        el.style.setProperty("fill", f === "D" ? "#000" : "none", "important");
+        el.style.setProperty("stroke", st === "D" ? "#000" : "none", "important");
+      });
+      clone.setAttribute("width", vb[2]);
+      clone.setAttribute("height", vb[3]);
+      clone.setAttribute("preserveAspectRatio", "none");
+      let str = new XMLSerializer().serializeToString(clone);
+      if (!/xmlns="http:\/\/www\.w3\.org\/2000\/svg"/.test(str)) str = str.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+      const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(str);
+      maskStyle.textContent = `.foil{-webkit-mask-image:url("${url}");mask-image:url("${url}")}`;
+    }
+
+    function fit(html) { vb = viewBoxOf(html); size(); }
+    function setRes(n) { if (n !== res) { res = n; size(); } }
+    function setBlobs(n) { activeBlobs = Math.max(1, Math.min(BLOBS, n)); }
+    const draw = now => frame(STILL ? 2600 : now);
+
+    return { frame: draw, fit, attach, detach, setMask, setRes, setBlobs };
   })();
 
-  function addShine(target) {
-    target.fills.forEach(f => {
-      if (f.light || /^(text|tspan)$/i.test(f.el.tagName)) return; // text would reflow
-      const c = f.el.cloneNode(false);
-      c.removeAttribute("id");
-      c.classList.add("bn-shine");
-      c.style.setProperty("fill", "url(#iri-shine)", "important");
-      c.style.setProperty("stroke", "none", "important");
-      f.el.after(c);  // directly above its twin, so later light shapes still cover it
-    });
+  /* ============================ quality ============================
+     Moving the logo is free (GPU). The colour canvas is cheap but not free,
+     so on weak hardware (TVs, sticks, set-top boxes) its frame rate, size and
+     blob count step down. "auto" watches for dropped frames and steps down,
+     never back up, so it can't oscillate. Force a level with ?quality=low.  */
+  const LEVELS = {
+    high:   { fps: 60, blobs: BLOBS,                  res: 256, glow: true,  parts: 1400 },
+    medium: { fps: 30, blobs: Math.ceil(BLOBS * 0.7), res: 192, glow: true,  parts: 900  },
+    low:    { fps: 20, blobs: Math.ceil(BLOBS * 0.45),res: 128, glow: false, parts: 450  }
+  };
+  const ORDER = ["high", "medium", "low"];
+  let level = "high";
+
+  function applyLevel(name) {
+    level = name;
+    const L = LEVELS[name];
+    sheen.setBlobs(L.blobs);
+    sheen.setRes(L.res);
+    document.body.classList.toggle("lowfx", !L.glow);
+    maxParts = L.parts;
+    $("#v-quality").textContent = state.quality === "auto" ? name : "";
+    lastSheen = 0;
+    sheen.frame(performance.now());
+  }
+
+  // a frame counts as dropped if it took well over the screen's normal frame
+  // time, so a steady 30Hz TV isn't mistaken for a struggling one
+  const jank = { dts: [], since: 0, strikes: 0 };
+  function watchFrames(dtMs, now) {
+    if (state.quality !== "auto" || level === "low" || document.hidden) return;
+    if (!jank.since) jank.since = now + 3000;    // ignore start-up hitches
+    if (now < jank.since) return;
+    jank.dts.push(dtMs);
+    if (now - jank.since < 2500) return;
+    const sorted = jank.dts.slice().sort((a, b) => a - b);
+    const normal = sorted[Math.floor(sorted.length * 0.2)] || 16.7;
+    const bad = jank.dts.filter(d => d > normal * 1.7).length / jank.dts.length;
+    jank.dts.length = 0; jank.since = now;
+    // two bad checks in a row, so one hiccup doesn't cost quality
+    jank.strikes = (bad > 0.12 || normal > 45) ? jank.strikes + 1 : 0;
+    if (jank.strikes >= 2) { jank.strikes = 0; applyLevel(ORDER[ORDER.indexOf(level) + 1]); }
   }
 
   /* ============================ fireworks ============================
@@ -731,7 +774,7 @@
      corner during the show restarts the clock rather than stacking a second
      one. Drawn on its own canvas behind the logo so nothing is obscured.   */
   const CELEBRATION = 30000;
-  const MAX_PARTS = 1400;
+  let maxParts = 1400;
 
   const fw = (() => {
     const cv = $("#fw"), ctx = cv.getContext("2d");
@@ -739,8 +782,9 @@
     let W = 0, H = 0, dpr = 1, until = 0, nextLaunch = 0, dirty = false;
 
     function fit() {
-      dpr = Math.min(devicePixelRatio || 1, 2);
       W = innerWidth; H = innerHeight;
+      // a 4K TV at 2x is ~8M pixels to fade every frame; cap near 1080p
+      dpr = Math.min(devicePixelRatio || 1, 2, Math.sqrt(2.1e6 / Math.max(1, W * H)));
       cv.width = Math.round(W * dpr);
       cv.height = Math.round(H * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -761,7 +805,7 @@
 
     function burst(s) {
       const n = 60 + ((Math.random() * 50) | 0);
-      if (parts.length > MAX_PARTS) return;
+      if (parts.length > maxParts) return;
       const ringSpeed = rand(120, 240);
       const ring = Math.random() < 0.4;
       for (let i = 0; i < n; i++) {
@@ -864,8 +908,8 @@
 
   /* ============================ build ============================ */
   function build() {
-    logos.forEach(l => l.wrap.remove());
-    logos.forEach(l => l.ghosts.forEach(g => g.el.remove()));
+    logos.forEach(l => { sheen.detach(l.wrap); l.wrap.remove(); });
+    logos.forEach(l => l.ghosts.forEach(g => { sheen.detach(g.el); g.el.remove(); }));
     logos = [];
     sheen.fit(markup);
 
@@ -877,6 +921,7 @@
         el.innerHTML = markup;
         stage.appendChild(el);
         ghosts.push({ el, paint: paintable(el) });
+        sheen.attach(el);
       }
       const wrap = document.createElement("div");
       wrap.className = "logo";
@@ -889,12 +934,14 @@
         ci: (Math.random() * PALETTE.length) | 0,
         tx: -1e9, ty: -1e9, hist: []
       };
-      addShine(l.paint);
+      if (i === 0) sheen.setMask(wrap, l.paint);
+      sheen.attach(wrap);
       logos.push(l);
       resize(l);
       place(l);
       repaint(l);
     }
+    sheen.frame(performance.now());  // fill the new canvases straight away
   }
 
   function resize(l) {
@@ -1011,12 +1058,17 @@
     }
   }
 
-  let last = performance.now();
+  let last = performance.now(), lastSheen = 0;
   function loop(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const rawMs = now - last;
+    const dt = Math.min(0.05, rawMs / 1000);
     last = now;
+    watchFrames(rawMs, now);
     if (!state.paused) step(dt, now);
-    if (state.colour === "iridescent" && !STILL) sheen.frame(now);
+    if (state.colour === "iridescent" && !STILL && now - lastSheen >= 1000 / LEVELS[level].fps - 2) {
+      lastSheen = now;
+      sheen.frame(now);
+    }
     fw.step(dt);
     render();
     requestAnimationFrame(loop);
@@ -1152,6 +1204,16 @@
     document.body.classList.toggle("iri", state.colour === "iridescent");
     logos.forEach(repaint);
   });
+
+  const qParam = new URLSearchParams(location.search).get("quality");
+  if (qParam && (qParam === "auto" || LEVELS[qParam])) state.quality = qParam;
+  $("#quality").value = state.quality;
+  $("#quality").addEventListener("change", e => {
+    state.quality = e.target.value;
+    jank.dts.length = 0; jank.since = 0; jank.strikes = 0;
+    applyLevel(state.quality === "auto" ? "high" : state.quality);
+  });
+  applyLevel(state.quality === "auto" ? "high" : state.quality);
 
   $("#corner").value = state.corner;
   $("#corner").addEventListener("change", e => { state.corner = e.target.value; });
