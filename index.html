@@ -23,7 +23,7 @@
   html,body{height:100%}
   body{
     margin:0; overflow:hidden;
-    background:#1F2933;
+    background:#000;
     color:var(--ink);
     font-family:var(--sans);
     -webkit-font-smoothing:antialiased;
@@ -43,6 +43,10 @@
     pointer-events:none;
   }
   .ghost{opacity:0}
+  #fx-defs{position:absolute; width:0; height:0; overflow:hidden}
+  body:not(.iri) .bn-shine{display:none}
+  /* soft halo so the foil reads as light-emitting on black */
+  body.iri .logo svg{filter:drop-shadow(0 0 14px hsla(var(--glow-h, 260), 100%, 65%, .38))}
   .logo svg,.ghost svg{width:100%; height:100%; display:block; overflow:visible}
 
   /* ---------- corner flash ---------- */
@@ -221,6 +225,31 @@
 </head>
 <body>
 
+<svg id="fx-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- holographic foil: stops are generated and morphed by the script -->
+    <linearGradient id="iri-flow" gradientUnits="userSpaceOnUse" spreadMethod="repeat"></linearGradient>
+    <!-- the logo's actual fill: drifting colour blobs over the flowing foil.
+         The script sizes it to the artwork and moves the blobs every frame. -->
+    <pattern id="iri-blobs" patternUnits="userSpaceOnUse" patternContentUnits="userSpaceOnUse">
+      <g id="iri-content"><rect id="iri-base" fill="url(#iri-flow)"/></g>
+    </pattern>
+    <!-- the beam: a broad, soft band of light. spreadMethod="repeat" means a
+         new beam enters as the last one leaves, at a constant pace -->
+    <linearGradient id="iri-shine" gradientUnits="userSpaceOnUse" spreadMethod="repeat">
+      <stop offset="0"   stop-color="#ff2d6f" stop-opacity="0"/>
+      <stop offset=".28" stop-color="#ff2d6f" stop-opacity="0"/>
+      <stop offset=".35" stop-color="#ff7a2d" stop-opacity=".22"/>
+      <stop offset=".42" stop-color="#fff3b0" stop-opacity=".5"/>
+      <stop offset=".5"  stop-color="#ffffff" stop-opacity=".8"/>
+      <stop offset=".58" stop-color="#b8fbff" stop-opacity=".5"/>
+      <stop offset=".65" stop-color="#2d8bff" stop-opacity=".22"/>
+      <stop offset=".72" stop-color="#8a2dff" stop-opacity="0"/>
+      <stop offset="1"   stop-color="#8a2dff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
+
 <canvas id="fw"></canvas>
 <div id="stage"></div>
 <div id="flash"></div>
@@ -262,7 +291,14 @@
   <div class="row" id="more-row">
     <div class="field">
       <span class="cap">Screen</span>
-      <label class="swatch" title="Background colour"><input type="color" id="bg" value="#1F2933"></label>
+      <label class="swatch" title="Background colour"><input type="color" id="bg" value="#000000"></label>
+    </div>
+    <div class="field">
+      <span class="cap">Logo colour</span>
+      <select id="colour">
+        <option value="iridescent" selected>Iridescent</option>
+        <option value="rainbow">Rainbow on bounce</option>
+      </select>
     </div>
     <div class="field grow">
       <span class="cap">Trail <b id="v-trail">0</b></span>
@@ -322,7 +358,8 @@
     speed: 130,      // px per second
     size: 140,       // logo height in px (this mark is 3.44:1, so ~482px wide)
     count: 1,
-    bg: "#1F2933",
+    bg: "#000000",
+    colour: "iridescent", // iridescent = shimmering foil | rainbow = classic colour-per-bounce
     trail: 0,        // ghost copies
     spin: 0,         // deg per second
     jitter: 0,       // deg of random angle change per bounce
@@ -421,10 +458,14 @@
     if (w >= vb[2] * 0.98 && h >= vb[3] * 0.98) first.remove();
   }
 
-  function aspectOf(html) {
+  function viewBoxOf(html) {
     const doc = new DOMParser().parseFromString(html, "image/svg+xml");
     const vb = (doc.documentElement.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-    return (vb.length === 4 && vb[2] > 0 && vb[3] > 0) ? vb[2] / vb[3] : 1;
+    return (vb.length === 4 && vb[2] > 0 && vb[3] > 0) ? vb : [0, 0, 100, 100];
+  }
+  function aspectOf(html) {
+    const vb = viewBoxOf(html);
+    return vb[2] / vb[3];
   }
 
   function loadMarkup(text) {
@@ -503,9 +544,185 @@
   }
 
   function repaint(l) {
-    const c = PALETTE[l.ci % PALETTE.length];
+    const c = state.colour === "iridescent" ? "url(#iri-blobs)" : PALETTE[l.ci % PALETTE.length];
     paint(l.paint, c);
     l.ghosts.forEach(g => paint(g.paint, c));
+  }
+
+  /* ============================ iridescence ============================
+     Two shared gradients live in #fx-defs. They use userSpaceOnUse, so the
+     coordinates are the artwork's own viewBox units: the colour field and the
+     glint sweep across the whole mark as one surface, not shape by shape.
+       shine - a broad beam of light that glides across at a steady pace,
+               one after another with no pauses
+       flow  - the foil colours, which travel in the same direction as the
+               beam but slower, so the colour shifts as the light moves over it
+     A copy of each dark shape is laid on top of the original and filled with
+     the shine, so the glint follows the exact silhouette (knockouts too).  */
+  const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const BEAM_PERIOD = 7;    // seconds for each beam to cross the logo (bigger = slower)
+  const BEAM_WIDTH = 1.15;  // spacing between beams, relative to the logo's width
+  const FLOW_PERIOD = 28;   // seconds for the colours to go all the way round
+  const HUE_PERIOD = 45;    // seconds for the whole palette to rotate through the spectrum
+  const MORPH_PERIOD = 17;  // seconds for each colour to swell and recede
+  const MORPH_DEPTH = 34;   // degrees of hue each colour wanders while morphing
+  const SATURATION = 100;   // %: chroma of the foil
+  const LIGHTNESS = 62;     // %: around 60 is vivid on black without going pastel
+  const STOPS = 13;         // more stops = smoother spectrum
+  const BLOBS = 13;         // colour blobs drifting over the logo
+  const BLOB_SIZE = 0.72;   // blob radius, relative to the logo's height
+  const BLOB_DRIFT = 30;    // rough seconds for a blob to wander across and back
+
+  const sheen = (() => {
+    const flow = $("#iri-flow"), shine = $("#iri-shine");
+    let vb = [0, 0, 100, 100];
+    const set = (el, a, b, c, d) => {
+      el.setAttribute("x1", a.toFixed(2)); el.setAttribute("y1", b.toFixed(2));
+      el.setAttribute("x2", c.toFixed(2)); el.setAttribute("y2", d.toFixed(2));
+    };
+    // the beam leans like "/" ; its travel direction is perpendicular to that lean
+    // build the foil's stops once; frame() recolours them
+    const stops = [];
+    for (let i = 0; i < STOPS; i++) {
+      const st = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+      st.setAttribute("offset", (i / (STOPS - 1)).toFixed(4));
+      flow.appendChild(st);
+      stops.push(st);
+    }
+
+    // A full spectrum across the band, rotating slowly. Each stop also drifts
+    // in hue and brightness on its own wave, so neighbouring colours bloom into
+    // each other instead of sliding past rigidly. Stop phases are spaced by a
+    // full turn, so the first and last stop always match and the repeat stays seamless.
+    function recolour(t) {
+      const base = (t / HUE_PERIOD) * 360;
+      const w = (t / MORPH_PERIOD) * Math.PI * 2;
+      for (let i = 0; i < STOPS; i++) {
+        const k = i / (STOPS - 1), ph = k * Math.PI * 2;
+        const h = base + k * 360
+          + MORPH_DEPTH * Math.sin(w + ph * 2)
+          + MORPH_DEPTH * 0.5 * Math.sin(w * 0.61 + ph * 3);
+        const l = LIGHTNESS + 7 * Math.sin(w * 0.8 + ph * 2);
+        stops[i].setAttribute("stop-color",
+          `hsl(${(((h % 360) + 360) % 360).toFixed(1)}, ${SATURATION}%, ${l.toFixed(1)}%)`);
+      }
+      document.body.style.setProperty("--glow-h", (((base + 200) % 360)).toFixed(0));
+    }
+
+    /* ---- blobs ----
+       Each blob is a circle filled with a soft radial gradient (solid centre,
+       feathered edge), so overlapping blobs melt into each other like ink in
+       water. They wander on slow, never-quite-repeating paths (two sine waves
+       per axis at unrelated speeds), breathe in size, and shift hue on their own. */
+    const NS = "http://www.w3.org/2000/svg";
+    const pattern = $("#iri-blobs"), base = $("#iri-base"), content = $("#iri-content"), defs = flow.parentNode;
+    const rnd = (i, k) => { const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return v - Math.floor(v); };
+    const blobs = [];
+    for (let i = 0; i < BLOBS; i++) {
+      const g = document.createElementNS(NS, "radialGradient");
+      g.id = "iri-blob-" + i;
+      const st = [0, .45, .75, 1].map(o => {
+        const e = document.createElementNS(NS, "stop");
+        e.setAttribute("offset", o);
+        g.appendChild(e);
+        return e;
+      });
+      defs.appendChild(g);
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("fill", `url(#${g.id})`);
+      content.appendChild(c);
+      const sp = (Math.PI * 2) / BLOB_DRIFT;
+      blobs.push({
+        c, st,
+        hue: (i * 137.508) % 360,                       // golden-angle spread: no two alike
+        ax: sp * (0.6 + rnd(i, 1) * 0.8), px: rnd(i, 2) * 6.283,
+        bx: sp * (1.3 + rnd(i, 3) * 0.9), qx: rnd(i, 4) * 6.283,
+        ay: sp * (0.7 + rnd(i, 5) * 0.9), py: rnd(i, 6) * 6.283,
+        by: sp * (1.6 + rnd(i, 7) * 1.1), qy: rnd(i, 8) * 6.283,
+        br: sp * (1.0 + rnd(i, 9)),       pr: rnd(i, 10) * 6.283,
+        size: 0.75 + rnd(i, 11) * 0.5
+      });
+    }
+
+    function moveBlobs(t) {
+      const [x, y, w, h] = vb;
+      const hueBase = (t / HUE_PERIOD) * 360;
+      const mw = (t / MORPH_PERIOD) * Math.PI * 2;
+      for (let i = 0; i < blobs.length; i++) {
+        const b = blobs[i];
+        // spread starting lanes across the width so the whole mark stays covered
+        const lane = (i + 0.5) / blobs.length;
+        const ux = lane + 0.32 * Math.sin(t * b.ax + b.px) + 0.14 * Math.sin(t * b.bx + b.qx);
+        const uy = 0.5 + 0.55 * Math.sin(t * b.ay + b.py) + 0.2 * Math.sin(t * b.by + b.qy);
+        const fx = ux;                                 // may drift past the edges, never jumps
+        const r = h * BLOB_SIZE * b.size * (1 + 0.22 * Math.sin(t * b.br + b.pr));
+        b.c.setAttribute("cx", (x + fx * w).toFixed(1));
+        b.c.setAttribute("cy", (y + uy * h).toFixed(1));
+        b.c.setAttribute("r", r.toFixed(1));
+
+        const hue = (((hueBase + b.hue + MORPH_DEPTH * 1.5 * Math.sin(mw + i)) % 360) + 360) % 360;
+        const l = LIGHTNESS + 6 * Math.sin(mw * 0.7 + i * 1.9);
+        const col = `hsl(${hue.toFixed(1)}, ${SATURATION}%, ${l.toFixed(1)}%)`;
+        [1, .8, .35, 0].forEach((a, k) => {
+          b.st[k].setAttribute("stop-color", col);
+          b.st[k].setAttribute("stop-opacity", a);
+        });
+      }
+    }
+
+    function fitPattern() {
+      const [x, y, w, h] = vb;
+      // a generous margin so shapes that poke past the viewBox aren't tiled
+      const m = Math.max(w, h);
+      [[pattern, "x", x - m], [pattern, "y", y - m], [pattern, "width", w + 2 * m], [pattern, "height", h + 2 * m],
+       [base, "x", x - m], [base, "y", y - m], [base, "width", w + 2 * m], [base, "height", h + 2 * m]]
+        .forEach(([el, a, v]) => el.setAttribute(a, v.toFixed(2)));
+      // pattern content is drawn relative to the tile's corner; shift it back so
+      // everything inside can use the artwork's own coordinates
+      content.setAttribute("transform", `translate(${(m - x).toFixed(2)} ${(m - y).toFixed(2)})`);
+    }
+
+    const BX = 0.94, BY = 0.34, BN = Math.hypot(BX, BY);
+    const bx = BX / BN, by = BY / BN;
+
+    function frame(now) {
+      const t = now / 1000;
+      const [x, y, w, h] = vb, cx = x + w / 2, cy = y + h / 2;
+      const across = w * bx + h * by;           // logo's length along the beam's path
+
+      // beam: constant speed, shifting a whole repeat per period, so it never jumps
+      const gap = across * BEAM_WIDTH;
+      const bOff = ((t / BEAM_PERIOD) % 1) * gap - gap / 2;
+      const sx = cx + bx * bOff, sy = cy + by * bOff;
+      set(shine, sx, sy, sx + bx * gap, sy + by * gap);
+
+      // colour: rides the same direction as the beam, more slowly, with a gentle tilt
+      const ang = Math.atan2(by, bx) + (8 * Math.sin(t * 0.09)) * Math.PI / 180;
+      const dx = Math.cos(ang), dy = Math.sin(ang);
+      const period = across * 1.8;  // wide, soft wash beneath the blobs
+      const fOff = ((t / FLOW_PERIOD) % 1) * period - period / 2;
+      const fx = cx + dx * fOff, fy = cy + dy * fOff;
+      set(flow, fx, fy, fx + dx * period, fy + dy * period);
+      recolour(t);
+      moveBlobs(t);
+    }
+
+    // new artwork means new user-space units; refit and draw one frame
+    function fit(html) { vb = viewBoxOf(html); fitPattern(); frame(STILL ? 2600 : performance.now()); }
+
+    return { frame, fit };
+  })();
+
+  function addShine(target) {
+    target.fills.forEach(f => {
+      if (f.light || /^(text|tspan)$/i.test(f.el.tagName)) return; // text would reflow
+      const c = f.el.cloneNode(false);
+      c.removeAttribute("id");
+      c.classList.add("bn-shine");
+      c.style.setProperty("fill", "url(#iri-shine)", "important");
+      c.style.setProperty("stroke", "none", "important");
+      f.el.after(c);  // directly above its twin, so later light shapes still cover it
+    });
   }
 
   /* ============================ fireworks ============================
@@ -650,6 +867,7 @@
     logos.forEach(l => l.wrap.remove());
     logos.forEach(l => l.ghosts.forEach(g => g.el.remove()));
     logos = [];
+    sheen.fit(markup);
 
     for (let i = 0; i < state.count; i++) {
       const ghosts = [];
@@ -671,6 +889,7 @@
         ci: (Math.random() * PALETTE.length) | 0,
         tx: -1e9, ty: -1e9, hist: []
       };
+      addShine(l.paint);
       logos.push(l);
       resize(l);
       place(l);
@@ -797,6 +1016,7 @@
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     if (!state.paused) step(dt, now);
+    if (state.colour === "iridescent" && !STILL) sheen.frame(now);
     fw.step(dt);
     render();
     requestAnimationFrame(loop);
@@ -926,6 +1146,13 @@
   $("#bg").value = state.bg;
   $("#bg").addEventListener("input", e => { state.bg = e.target.value; document.body.style.background = state.bg; });
 
+  $("#colour").value = state.colour;
+  $("#colour").addEventListener("change", e => {
+    state.colour = e.target.value;
+    document.body.classList.toggle("iri", state.colour === "iridescent");
+    logos.forEach(repaint);
+  });
+
   $("#corner").value = state.corner;
   $("#corner").addEventListener("change", e => { state.corner = e.target.value; });
 
@@ -1014,6 +1241,7 @@
   aspect = aspectOf(markup);
 
   document.body.style.background = state.bg;
+  document.body.classList.toggle("iri", state.colour === "iridescent");
   document.body.classList.toggle("crt", state.crt);
   counterBox.hidden = !state.counter;
   build();
